@@ -2,7 +2,7 @@ import heapq
 import sys
 import time
 import csv
-import copy
+import os
 
 # Constante para infinito
 INF = float('inf')
@@ -167,14 +167,16 @@ def read_file(filename):
         print(f"Error al leer el archivo: {e}")
         return None
 
-def write_to_csv(filename, data):
+def write_to_csv(data: dict, headers: list[str], filename: str):
     """Escribe los resultados al archivo CSV"""
-    try:
-        with open(filename, 'a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([data[0], data[1]])
-    except Exception as e:
-        print(f"Error al escribir en CSV: {e}")
+    file_exists = os.path.isfile(filename)
+
+    with open(filename, "a") as f:
+        if not file_exists:
+            f.write(",".join(headers) + "\n")
+            print(f"\nArchivo creado: {filename}\n")
+        valores = [f"{data[h]:.4f}" if isinstance(data[h], float) else str(data[h]) for h in headers]
+        f.write(",".join(valores) + "\n")
 
 def write_min_path(path, cost, filename="min_path.txt"):
     """Escribe el camino mínimo encontrado"""
@@ -188,20 +190,17 @@ def write_min_path(path, cost, filename="min_path.txt"):
         print(f"Error al escribir el camino: {e}")
 
 def main():
-    filename = "5nodos.txt"
+    if len(sys.argv) < 2:
+        print("Uso: python tsp_sec.py <archivo_entrada>")
+        return
+    
+    filename = sys.argv[1]
+    output_file = "output_sec.csv"
     
     # Leer matriz desde archivo
     matrix = read_file(filename)
     if matrix is None:
-        print("Error: No se pudo leer el archivo. Usando matriz de prueba.")
-        # Usar matriz de prueba si no se puede leer el archivo
-        matrix = [
-            [INF, 20, 30, 10, 11],
-            [15, INF, 16, 4, 2],
-            [3, 5, INF, 2, 4],
-            [19, 6, 18, INF, 3],
-            [16, 4, 7, 16, INF]
-        ]
+        return
     
     # Matrices de prueba adicionales
     """
@@ -231,6 +230,13 @@ def main():
     
     elapsed_time = end_time - start_time
     print(f"{elapsed_time:.5f}")
+    
+    # Guardar resultados
+    headers = ["elapsed_time"]
+    data = {
+        "elapsed_time": elapsed_time,
+    }
+    write_to_csv(data, headers, output_file)
     
     if result:
         print(result.cost)

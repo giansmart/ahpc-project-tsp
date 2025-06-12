@@ -4,7 +4,7 @@ import time
 import csv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-import copy
+import os
 
 # Constante para infinito
 INF = float('inf')
@@ -192,14 +192,16 @@ def read_file(filename):
         print(f"Error al leer el archivo: {e}")
         return None
 
-def write_to_csv(filename, data):
+def write_to_csv(data: dict, headers: list[str], filename: str):
     """Escribe los resultados al archivo CSV"""
-    try:
-        with open(filename, 'a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([data[0], data[1]])
-    except Exception as e:
-        print(f"Error al escribir en CSV: {e}")
+    file_exists = os.path.isfile(filename)
+
+    with open(filename, "a") as f:
+        if not file_exists:
+            f.write(",".join(headers) + "\n")
+            print(f"\nArchivo creado: {filename}\n")
+        valores = [f"{data[h]:.4f}" if isinstance(data[h], float) else str(data[h]) for h in headers]
+        f.write(",".join(valores) + "\n")
 
 def write_min_path(path, cost, filename="min_path.txt"):
     """Escribe el camino mínimo encontrado"""
@@ -256,8 +258,12 @@ def main():
     print(f"{elapsed_time:.5f}")
     
     # Guardar resultados
-    data = (num_threads, elapsed_time)
-    write_to_csv(output_file, data)
+    headers = ["num_threads", "elapsed_time"]
+    data = {
+        "num_threads": num_threads,
+        "elapsed_time": elapsed_time,
+    }
+    write_to_csv(data, headers, output_file)
     
     if result:
         print(f"Costo mínimo encontrado: {result.cost}")
