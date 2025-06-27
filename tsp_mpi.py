@@ -199,12 +199,19 @@ def worker_process(comm, rank):
     local_queue = []
     heapq.heapify(local_queue)
     
+    # Contadores de tiempo
+    communication_time = 0.0
+    computation_time = 0.0
+    
     while True:
         # Verificar mensajes del maestro
         if comm.Iprobe(source=0, tag=MPI.ANY_TAG):
             status = MPI.Status()
             comm.Probe(source=0, tag=MPI.ANY_TAG, status=status)
             tag = status.Get_tag()
+            
+            # Medir tiempo de comunicación
+            comm_start = time.time()
             
             if tag == 1:  # WORK_TAG - recibir nodo para procesar
                 node = comm.recv(source=0, tag=1)
@@ -216,14 +223,21 @@ def worker_process(comm, rank):
                     best_cost = new_bound
                     
             elif tag == 3:  # TERMINATE_TAG - terminar
+                comm.recv(source=0, tag=3)
+                communication_time += time.time() - comm_start
                 break
+            
+            communication_time += time.time() - comm_start
         
         # Procesar nodos locales si los hay
         if local_queue:
+            comp_start = time.time()
+            
             current_node = heapq.heappop(local_queue)
             
             # Poda por cota superior
             if current_node.cost >= best_cost:
+                computation_time += time.time() - comp_start
                 continue
             
             N = len(current_node.matrix_reduced)
@@ -234,18 +248,32 @@ def worker_process(comm, rank):
                 if current_node.cost < best_cost:
                     best_cost = current_node.cost
                     best_solution = current_node
+                    
+                    computation_time += time.time() - comp_start
+                    
                     # Reportar nueva mejor solución al maestro
+                    comm_start = time.time()
                     comm.send(best_solution, dest=0, tag=4)
+                    communication_time += time.time() - comm_start
+                else:
+                    computation_time += time.time() - comp_start
             else:
                 # Expandir nodo
                 children = expand_node(current_node, N)
                 for child in children:
                     if child.cost < best_cost:
                         heapq.heappush(local_queue, child)
+                
+                computation_time += time.time() - comp_start
         
         # Si no hay trabajo local, solicitar más al maestro
         if not local_queue:
+            comm_start = time.time()
             comm.send(None, dest=0, tag=5)  # REQUEST_WORK_TAG
+            communication_time += time.time() - comm_start
+    
+    # Enviar tiempos al maestro
+    comm.send((computation_time, communication_time), dest=0, tag=6)
     
     return best_solution, best_cost
 
@@ -253,17 +281,26 @@ def master_process(comm, size, adjacency_matrix):
     """Proceso maestro que coordina la búsqueda"""
     N = len(adjacency_matrix)
     
+    # Contadores de tiempo
+    communication_time = 0.0
+    computation_time = 0.0
+    
     # Si solo hay un proceso, resolver secuencialmente
     if size == 1:
-        return sequential_tsp(adjacency_matrix)
+        comp_start = time.time()
+        result = sequential_tsp(adjacency_matrix)
+        comp_end = time.time()
+        return result, comp_end - comp_start, 0.0
     
     global_queue = []
     heapq.heapify(global_queue)
     
     # Crear nodo raíz
+    comp_start = time.time()
     root = new_node(adjacency_matrix, [], 0, -1, 0, N)
     root.cost = cost_calculation(root.matrix_reduced, N)
     heapq.heappush(global_queue, root)
+    computation_time += time.time() - comp_start
     
     best_solution = None
     best_cost = INF
@@ -276,8 +313,10 @@ def master_process(comm, size, adjacency_matrix):
     TERMINATE_TAG = 3
     SOLUTION_TAG = 4
     REQUEST_WORK_TAG = 5
+    TIME_REPORT_TAG = 6
     
     # Distribuir trabajo inicial
+    comp_start = time.time()
     initial_work_distributed = 0
     while global_queue and initial_work_distributed < active_workers:
         if global_queue:
@@ -286,12 +325,15 @@ def master_process(comm, size, adjacency_matrix):
             for child in children:
                 heapq.heappush(global_queue, child)
         initial_work_distributed += 1
+    computation_time += time.time() - comp_start
     
     # Distribuir nodos iniciales a los trabajadores
+    comm_start = time.time()
     for worker_id in range(1, min(size, len(global_queue) + 1)):
         if global_queue:
             node = heapq.heappop(global_queue)
             comm.send(node, dest=worker_id, tag=WORK_TAG)
+    communication_time += time.time() - comm_start
     
     while active_workers > 0:
         # Verificar mensajes de los trabajadores
@@ -301,24 +343,33 @@ def master_process(comm, size, adjacency_matrix):
             source = status.Get_source()
             tag = status.Get_tag()
             
+            comm_start = time.time()
+            
             if tag == SOLUTION_TAG:  # Nueva mejor solución
                 solution = comm.recv(source=source, tag=SOLUTION_TAG)
+                communication_time += time.time() - comm_start
+                
                 if solution.cost < best_cost:
                     best_cost = solution.cost
                     best_solution = solution
                     
                     # Actualizar cota en todos los trabajadores
+                    comm_start = time.time()
                     for worker_id in range(1, size):
                         comm.send(best_cost, dest=worker_id, tag=UPDATE_BOUND_TAG)
+                    communication_time += time.time() - comm_start
                         
             elif tag == REQUEST_WORK_TAG:  # Solicitud de trabajo
                 comm.recv(source=source, tag=REQUEST_WORK_TAG)  # Consumir mensaje
+                communication_time += time.time() - comm_start
                 
                 if global_queue:
                     # Enviar trabajo disponible
                     node = heapq.heappop(global_queue)
                     if node.cost < best_cost:
+                        comm_start = time.time()
                         comm.send(node, dest=source, tag=WORK_TAG)
+                        communication_time += time.time() - comm_start
                     else:
                         pending_requests += 1
                 else:
@@ -329,6 +380,7 @@ def master_process(comm, size, adjacency_matrix):
                     break
         
         # Procesar algunos nodos localmente si la cola está muy llena
+        comp_start = time.time()
         nodes_processed = 0
         while global_queue and nodes_processed < 10:
             current_node = heapq.heappop(global_queue)
@@ -343,9 +395,15 @@ def master_process(comm, size, adjacency_matrix):
                     best_cost = current_node.cost
                     best_solution = current_node
                     
+                    computation_time += time.time() - comp_start
+                    
                     # Actualizar cota en todos los trabajadores
+                    comm_start = time.time()
                     for worker_id in range(1, size):
                         comm.send(best_cost, dest=worker_id, tag=UPDATE_BOUND_TAG)
+                    communication_time += time.time() - comm_start
+                    
+                    comp_start = time.time()
             else:
                 children = expand_node(current_node, N)
                 for child in children:
@@ -353,12 +411,37 @@ def master_process(comm, size, adjacency_matrix):
                         heapq.heappush(global_queue, child)
             
             nodes_processed += 1
+        computation_time += time.time() - comp_start
     
     # Terminar todos los trabajadores
+    comm_start = time.time()
     for worker_id in range(1, size):
         comm.send(None, dest=worker_id, tag=TERMINATE_TAG)
+    communication_time += time.time() - comm_start
     
-    return best_solution
+    # Recopilar tiempos de los trabajadores
+    worker_comp_times = []
+    worker_comm_times = []
+    
+    for worker_id in range(1, size):
+        comm_start = time.time()
+        worker_times = comm.recv(source=worker_id, tag=TIME_REPORT_TAG)
+        communication_time += time.time() - comm_start
+        
+        worker_comp_times.append(worker_times[0])
+        worker_comm_times.append(worker_times[1])
+    
+    # Para tiempo paralelo, tomar el MÁXIMO (no la suma) de los tiempos de workers
+    # Porque los procesos trabajaron en paralelo, no secuencialmente
+    max_worker_comp_time = max(worker_comp_times) if worker_comp_times else 0
+    max_worker_comm_time = max(worker_comm_times) if worker_comm_times else 0
+    
+    # El tiempo real de cómputo es el máximo entre maestro y workers
+    total_computation_time = max(computation_time, max_worker_comp_time)
+    # El tiempo real de comunicación incluye al maestro + el worker que más comunicó
+    total_communication_time = communication_time + max_worker_comm_time
+    
+    return best_solution, total_computation_time, total_communication_time
 
 def print_solution(solution):
     """Imprime la solución encontrada de forma legible"""
@@ -427,16 +510,21 @@ def main():
             print_matrix(matrix)
         
         start_time = time.time()
-        result = sequential_tsp(matrix)
+        result, comp_time, comm_time = master_process(comm, size, matrix)
         end_time = time.time()
         
-        elapsed_time = end_time - start_time
+        total_time = end_time - start_time
         
         if result:
             print_solution(result)
-            print(f"Tiempo de ejecución: {elapsed_time:.5f} segundos")
+            print(f"Tiempo total de ejecución: {total_time:.5f} segundos")
+            print(f"Tiempo de cómputo: {comp_time:.5f} segundos")
+            print(f"Tiempo de comunicación: {comm_time:.5f} segundos")
+            print(f"Overhead (sinc/setup): {total_time - comp_time - comm_time:.5f} segundos")
             data = {
-                "elapsed_time": elapsed_time,
+                "total_time": total_time,
+                "computation_time": comp_time,
+                "communication_time": comm_time,
                 "num_processes": size,
                 "num_cities": num_cities,
                 "cost": result.cost
@@ -470,16 +558,35 @@ def main():
     
     if rank == 0:
         # Proceso maestro
-        result = master_process(comm, size, matrix)
+        result, comp_time, comm_time = master_process(comm, size, matrix)
         end_time = time.time()
         
-        elapsed_time = end_time - start_time
+        total_time = end_time - start_time
         
         if result:
             print_solution(result)
-            print(f"Tiempo de ejecución: {elapsed_time:.5f} segundos")
+            print(f"Tiempo total de ejecución: {total_time:.5f} segundos")
+            print(f"Tiempo de cómputo (paralelo): {comp_time:.5f} segundos")
+            print(f"Tiempo de comunicación: {comm_time:.5f} segundos")
+            
+            overhead = total_time - comp_time - comm_time
+            print(f"Overhead (sinc/setup): {overhead:.5f} segundos")
+            
+            if total_time > 0:
+                compute_eff = (comp_time/total_time)*100
+                comm_overhead_pct = (comm_time/total_time)*100
+                overhead_pct = (overhead/total_time)*100
+                
+                print("Distribución del tiempo:")
+                print(f"  - Cómputo: {compute_eff:.2f}%")
+                print(f"  - Comunicación: {comm_overhead_pct:.2f}%")
+                print(f"  - Overhead: {overhead_pct:.2f}%")
+            
             data = {
-                "elapsed_time": elapsed_time,
+                "total_time": total_time,
+                "computation_time": comp_time,
+                "communication_time": comm_time,
+                "overhead": overhead,
                 "num_processes": size,
                 "num_cities": num_cities,
                 "cost": result.cost
