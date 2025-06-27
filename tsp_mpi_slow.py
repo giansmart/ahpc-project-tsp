@@ -1,11 +1,10 @@
+from mpi4py import MPI
 import heapq
-import sys
 import time
-import csv
-import os
+import sys
 
-# Constante para infinito
 INF = float('inf')
+
 
 class Node:
     """Estructura para representar un nodo en el árbol de búsqueda"""
@@ -54,6 +53,8 @@ def new_node(matrix_parent, path, level, i, j, N):
     node.vertex = j
     
     return node
+
+
 
 def reduce_row(matrix_reduced, N):
     """Reduce las filas de la matriz y devuelve el costo de reducción"""
@@ -105,44 +106,32 @@ def cost_calculation(matrix_reduced, N):
     
     return cost
 
-def print_path(path):
-    """Imprime el camino encontrado"""
-    for i, j in path:
-        print(f"{i + 1} -> {j + 1}")
-
-def tsp_branch_and_bound(adjacency_matrix):
-    """
-    Resuelve el TSP usando Branch and Bound (versión secuencial)
-    """
-    N = len(adjacency_matrix)
+def tsp_branch_and_bound_partial(matrix, start_nodes):
+    N = len(matrix)
     pq = []
     heapq.heapify(pq)
     
-    # Crear nodo raíz
-    root = new_node(adjacency_matrix, [], 0, -1, 0, N)
-    root.cost = cost_calculation(root.matrix_reduced, N)
-    
-    heapq.heappush(pq, root)
-    
+    for j in start_nodes:
+        root = new_node(matrix, [], 1, 0, j, N)
+        root.cost = matrix[0][j] + cost_calculation(root.matrix_reduced, N)
+        heapq.heappush(pq, root)
+
+    best = None
     while pq:
-        current_min = heapq.heappop(pq)
-        i = current_min.vertex
-        
-        # Si hemos visitado todos los nodos, agregar el regreso al inicio
-        if current_min.level == N - 1:
-            current_min.path.append((i, 0))
-            return current_min
-        
-        # Generar todos los nodos hijos
+        current = heapq.heappop(pq)
+        i = current.vertex
+        if current.level == N - 1:
+            current.path.append((i, 0))
+            if best is None or current.cost < best.cost:
+                best = current
+            continue
         for j in range(N):
-            if current_min.matrix_reduced[i][j] != INF:
-                child = new_node(current_min.matrix_reduced, current_min.path, 
-                               current_min.level + 1, i, j, N)
-                child.cost = (current_min.cost + current_min.matrix_reduced[i][j] + 
-                            cost_calculation(child.matrix_reduced, N))
+            if current.matrix_reduced[i][j] != INF:
+                child = new_node(current.matrix_reduced, current.path, current.level + 1, i, j, N)
+                child.cost = current.cost + current.matrix_reduced[i][j] + cost_calculation(child.matrix_reduced, N)
                 heapq.heappush(pq, child)
-    
-    return None
+    return best
+
 
 def read_file(filename):
     """Lee la matriz de adyacencia desde un archivo"""
@@ -167,84 +156,48 @@ def read_file(filename):
         print(f"Error al leer el archivo: {e}")
         return None
 
-def write_to_csv(data: dict, headers: list[str], filename: str):
-    """Escribe los resultados al archivo CSV"""
-    file_exists = os.path.isfile(filename)
-
-    with open(filename, "a") as f:
-        if not file_exists:
-            f.write(",".join(headers) + "\n")
-            print(f"\nArchivo creado: {filename}\n")
-        valores = [f"{data[h]:.4f}" if isinstance(data[h], float) else str(data[h]) for h in headers]
-        f.write(",".join(valores) + "\n")
-
-def write_min_path(path, cost, filename="min_path.txt"):
-    """Escribe el camino mínimo encontrado"""
-    try:
-        with open(filename, 'w') as file:
-            file.write(f"Costo mínimo: {cost}\n")
-            file.write("Camino:\n")
-            for i, j in path:
-                file.write(f"{i + 1} -> {j + 1}\n")
-    except Exception as e:
-        print(f"Error al escribir el camino: {e}")
 
 def main():
-    if len(sys.argv) < 2:
-        print("Uso: python tsp_sec.py <ruta_archivo_entrada>")
-        return
-    
-    filename = sys.argv[1]
-    output_file = "output_sec.csv"
-    
-    # Leer matriz desde archivo
-    matrix = read_file(filename)
-    if matrix is None:
-        return
-    
-    # Matrices de prueba adicionales
-    """
-    # Matriz de prueba 1 - Resultado esperado: 28
-    ad = [
-        [INF, 20, 30, 10, 11],
-        [15, INF, 16, 4, 2],
-        [3, 5, INF, 2, 4],
-        [19, 6, 18, INF, 3],
-        [16, 4, 7, 16, INF]
-    ]
-    
-    # Matriz de prueba 2
-    test = [
-        [INF, 3, 4, 2, 7],
-        [3, INF, 4, 6, 3],
-        [4, 4, INF, 5, 8],
-        [2, 6, 5, INF, 6],
-        [7, 3, 8, 6, INF]
-    ]
-    """
-    
-    # Medir tiempo de ejecución
-    start_time = time.time()
-    result = tsp_branch_and_bound(matrix)
-    end_time = time.time()
-    
-    elapsed_time = end_time - start_time
-    print(f"{elapsed_time:.5f}")
-    
-    # Guardar resultados
-    headers = ["elapsed_time"]
-    data = {
-        "elapsed_time": elapsed_time,
-    }
-    write_to_csv(data, headers, output_file)
-    
-    if result:
-        print(result.cost)
-        # Opcional: mostrar el camino completo
-        # print("Camino encontrado:")
-        # print_path(result.path)
-    else:
-        print("No se encontró solución")
+    comm = MPI.COMM_WORLD
+    rank = comm.Get_rank()
+    size = comm.Get_size()
+
+    matrix = None
+    N = 0
+    if rank == 0:
+        filename = sys.argv[1]
+        matrix = read_file(filename)
+        N = len(matrix)
+
+    # Medición broadcast
+    t0 = MPI.Wtime()
+    matrix = comm.bcast(matrix, root=0)
+    N = comm.bcast(N, root=0)
+    t1 = MPI.Wtime()
+
+    # División de nodos hijos del nodo raíz (ciudad 0)
+    assigned = [j for j in range(1, N) if j % size == rank]
+
+    # Resolución local
+    t2 = MPI.Wtime()
+    result = tsp_branch_and_bound_partial(matrix, assigned)
+    local_cost = result.cost if result else INF
+    local_path = result.path if result else []
+    t3 = MPI.Wtime()
+
+    # Gather en el root
+    gathered = comm.gather((local_cost, local_path), root=0)
+    t4 = MPI.Wtime()
+
+    if rank == 0:
+        best_cost, best_path = min(gathered, key=lambda x: x[0])
+        print(f"Mejor costo: {best_cost}")
+        print("Camino:")
+        for i, j in best_path:
+            print(f"{i + 1} -> {j + 1}")
+        print(f"T_broadcast: {t1 - t0:.5f}s")
+        print(f"T_solve: {t3 - t2:.5f}s")
+        print(f"T_gather: {t4 - t3:.5f}s")
 
 if __name__ == "__main__":
     main()
