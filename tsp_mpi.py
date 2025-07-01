@@ -6,6 +6,7 @@ import os
 import random
 from mpi4py import MPI
 import pickle
+from utils import save_result, print_matrix
 
 # Constante para infinito
 INF = float('inf')
@@ -23,29 +24,6 @@ class Node:
         """Comparador para la cola de prioridad (min-heap)"""
         return self.cost < other.cost
 
-def print_matrix(matrix):
-    """Imprime la matriz de adyacencia"""
-    print("Matriz de distancias:")
-    print("=" * 50)
-    n = len(matrix)
-    
-    # Imprimir encabezado de columnas
-    print("     ", end="")
-    for j in range(n):
-        print(f"Ciudad{j:2d} ", end="")
-    print()
-    
-    # Imprimir filas con datos
-    for i in range(n):
-        print(f"Ciudad{i:2d} ", end="")
-        for j in range(n):
-            if matrix[i][j] == 0:
-                print("      0   ", end="")
-            else:
-                print(f"{matrix[i][j]:8.0f} ", end="")
-        print()
-    print("=" * 50)
-    print()
 
 def generate_random_matrix(n, max_distance=500, seed=None):
     """Genera una matriz de distancias aleatoria para n ciudades"""
@@ -438,8 +416,10 @@ def master_process(comm, size, adjacency_matrix):
     
     # El tiempo real de cómputo es el máximo entre maestro y workers
     total_computation_time = max(computation_time, max_worker_comp_time)
-    # El tiempo real de comunicación incluye al maestro + el worker que más comunicó
-    total_communication_time = communication_time + max_worker_comm_time
+    
+    # Para comunicación, tomar el máximo porque cuando el maestro envía/recibe,
+    # los workers también están enviando/recibiendo simultáneamente
+    total_communication_time = max(communication_time, max_worker_comm_time)
     
     return best_solution, total_computation_time, total_communication_time
 
@@ -460,16 +440,6 @@ def print_solution(solution):
     print(path_str)
     print()
 
-def write_to_csv(data: dict, headers: list[str], filename: str):
-    """Escribe los resultados al archivo CSV"""
-    file_exists = os.path.isfile(filename)
-
-    with open(filename, "a") as f:
-        if not file_exists:
-            f.write(",".join(headers) + "\n")
-            print(f"\nArchivo creado: {filename}\n")
-        valores = [f"{data[h]:.4f}" if isinstance(data[h], float) else str(data[h]) for h in headers]
-        f.write(",".join(valores) + "\n")
 
 def main():
     comm = MPI.COMM_WORLD
@@ -577,20 +547,23 @@ def main():
                 comm_overhead_pct = (comm_time/total_time)*100
                 overhead_pct = (overhead/total_time)*100
                 
-                print("Distribución del tiempo:")
+                print(f"Distribución del tiempo:")
                 print(f"  - Cómputo: {compute_eff:.2f}%")
                 print(f"  - Comunicación: {comm_overhead_pct:.2f}%")
                 print(f"  - Overhead: {overhead_pct:.2f}%")
             
             data = {
+                "p": size,
+                "n": num_cities,
                 "total_time": total_time,
-                "computation_time": comp_time,
-                "communication_time": comm_time,
+                "comp_time": comp_time,
+                "comm_time": comm_time,
                 "overhead": overhead,
-                "num_processes": size,
-                "num_cities": num_cities,
                 "cost": result.cost
             }
+
+            save_result(data, "results.csv")
+
             print(f"Datos de rendimiento: {data}")
         else:
             print("No se encontró solución")
