@@ -6,7 +6,7 @@ import os
 import random
 from mpi4py import MPI
 import pickle
-from utils import save_result, print_matrix
+from utils import print_matrix
 
 # Constante para infinito
 INF = float('inf')
@@ -268,7 +268,8 @@ def master_process(comm, size, adjacency_matrix):
         comp_start = time.time()
         result = sequential_tsp(adjacency_matrix)
         comp_end = time.time()
-        return result, comp_end - comp_start, 0.0
+        # Para un solo proceso, no hay comunicación ni overhead significativo
+        return result, comp_end - comp_start, 0.0, 0.0
     
     global_queue = []
     heapq.heapify(global_queue)
@@ -409,19 +410,27 @@ def master_process(comm, size, adjacency_matrix):
         worker_comp_times.append(worker_times[0])
         worker_comm_times.append(worker_times[1])
     
-    # Para tiempo paralelo, tomar el MÁXIMO (no la suma) de los tiempos de workers
-    # Porque los procesos trabajaron en paralelo, no secuencialmente
-    max_worker_comp_time = max(worker_comp_times) if worker_comp_times else 0
-    max_worker_comm_time = max(worker_comm_times) if worker_comm_times else 0
+    # CORRECCIÓN: Calcular el tiempo total de cada worker
+    worker_total_times = [comp + comm for comp, comm in zip(worker_comp_times, worker_comm_times)]
+    max_worker_total = max(worker_total_times) if worker_total_times else 0
     
-    # El tiempo real de cómputo es el máximo entre maestro y workers
-    total_computation_time = max(computation_time, max_worker_comp_time)
+    # El tiempo del maestro
+    master_total = computation_time + communication_time
     
-    # Para comunicación, tomar el máximo porque cuando el maestro envía/recibe,
-    # los workers también están enviando/recibiendo simultáneamente
-    total_communication_time = max(communication_time, max_worker_comm_time)
+    # El tiempo paralelo real es el máximo entre maestro y el worker más lento
+    parallel_time = max(master_total, max_worker_total)
     
-    return best_solution, total_computation_time, total_communication_time
+    # Separar tiempo de cómputo efectivo y comunicación para reportes
+    # Usar proporciones del tiempo paralelo
+    if parallel_time > 0:
+        # Tomar el máximo de cómputo y comunicación por separado para reportes
+        max_comp = max(computation_time, max(worker_comp_times) if worker_comp_times else 0)
+        max_comm = max(communication_time, max(worker_comm_times) if worker_comm_times else 0)
+    else:
+        max_comp = computation_time
+        max_comm = communication_time
+    
+    return best_solution, max_comp, max_comm, parallel_time
 
 def print_solution(solution):
     """Imprime la solución encontrada de forma legible"""
@@ -439,6 +448,27 @@ def print_solution(solution):
     
     print(path_str)
     print()
+
+def save_result(data: dict, filename: str = "resultados.txt"):
+    """
+    Guarda un registro en un archivo de texto como CSV.
+    
+    Args:
+        data (dict): Diccionario con claves como columnas y valores como fila.
+        headers (list): Lista de columnas en orden.
+        filename (str): Nombre del archivo a guardar.
+    """
+    file_exists = os.path.isfile(filename)
+    headers = list(data.keys())
+
+    with open(filename, "a") as f:
+        if not file_exists:
+            f.write(",".join(headers) + "\n")
+            print(f"\nArchivo creado: {filename}\n")
+        valores = [f"{data[h]:.4f}" if isinstance(data[h], float) else str(data[h]) for h in headers]
+        f.write(",".join(valores) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 def main():
@@ -480,7 +510,7 @@ def main():
             print_matrix(matrix)
         
         start_time = time.time()
-        result, comp_time, comm_time = master_process(comm, size, matrix)
+        result, comp_time, comm_time, parallel_time = master_process(comm, size, matrix)
         end_time = time.time()
         
         total_time = end_time - start_time
@@ -490,15 +520,20 @@ def main():
             print(f"Tiempo total de ejecución: {total_time:.5f} segundos")
             print(f"Tiempo de cómputo: {comp_time:.5f} segundos")
             print(f"Tiempo de comunicación: {comm_time:.5f} segundos")
-            print(f"Overhead (sinc/setup): {total_time - comp_time - comm_time:.5f} segundos")
+            overhead = total_time - comp_time  # Para un proceso, overhead es principalmente setup
+            print(f"Overhead (setup/otros): {overhead:.5f} segundos")
+
             data = {
+                "p": 1,
+                "n": num_cities,
                 "total_time": total_time,
-                "computation_time": comp_time,
-                "communication_time": comm_time,
-                "num_processes": size,
-                "num_cities": num_cities,
+                "parallel_time": total_time,
+                "comp_time": comp_time,
+                "comm_time": comm_time,
+                "overhead": overhead,
                 "cost": result.cost
             }
+            save_result(data, "results.csv")
             print(f"Datos de rendimiento: {data}")
         else:
             print("No se encontró solución")
@@ -528,7 +563,7 @@ def main():
     
     if rank == 0:
         # Proceso maestro
-        result, comp_time, comm_time = master_process(comm, size, matrix)
+        result, comp_time, comm_time, parallel_time = master_process(comm, size, matrix)
         end_time = time.time()
         
         total_time = end_time - start_time
@@ -536,19 +571,23 @@ def main():
         if result:
             print_solution(result)
             print(f"Tiempo total de ejecución: {total_time:.5f} segundos")
-            print(f"Tiempo de cómputo (paralelo): {comp_time:.5f} segundos")
+            print(f"Tiempo de procesamiento paralelo: {parallel_time:.5f} segundos")
+            print(f"Tiempo de cómputo efectivo: {comp_time:.5f} segundos")
             print(f"Tiempo de comunicación: {comm_time:.5f} segundos")
             
-            overhead = total_time - comp_time - comm_time
-            print(f"Overhead (sinc/setup): {overhead:.5f} segundos")
+            # El overhead ahora es la diferencia entre el tiempo total y el tiempo paralelo
+            overhead = total_time - parallel_time
+            print(f"Overhead (sincronización/setup): {overhead:.5f} segundos")
             
             if total_time > 0:
                 compute_eff = (comp_time/total_time)*100
                 comm_overhead_pct = (comm_time/total_time)*100
                 overhead_pct = (overhead/total_time)*100
+                parallel_eff = (parallel_time/total_time)*100
                 
-                print(f"Distribución del tiempo:")
-                print(f"  - Cómputo: {compute_eff:.2f}%")
+                print(f"\nDistribución del tiempo:")
+                print(f"  - Procesamiento paralelo: {parallel_eff:.2f}%")
+                print(f"  - Cómputo efectivo: {compute_eff:.2f}%")
                 print(f"  - Comunicación: {comm_overhead_pct:.2f}%")
                 print(f"  - Overhead: {overhead_pct:.2f}%")
             
@@ -556,6 +595,7 @@ def main():
                 "p": size,
                 "n": num_cities,
                 "total_time": total_time,
+                "parallel_time": parallel_time,
                 "comp_time": comp_time,
                 "comm_time": comm_time,
                 "overhead": overhead,
@@ -564,7 +604,7 @@ def main():
 
             save_result(data, "results.csv")
 
-            print(f"Datos de rendimiento: {data}")
+            print(f"\nDatos de rendimiento: {data}")
         else:
             print("No se encontró solución")
     else:
