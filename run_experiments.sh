@@ -24,10 +24,10 @@ mkdir -p logs
 for n in "${n_list[@]}"; do
   for p in "${p_list[@]}"; do
     echo "--------------------------------"
-    echo " ^=   Ejecutando configuraci  n: p=$p, n=$n, runs=$runs"
+    echo "🧪 Ejecutando configuraci  n: p=$p, n=$n, runs=$runs"
     for i in $(seq 1 $runs); do
       echo ""
-      echo " ^v   ^o Run $i/$runs con p=$p y n=$n"
+      echo "▶️ Run $i/$runs con p=$p y n=$n"
     # srun -n $p --exclusive python3 $script $n
       mpiexec -n $p python3 $script $n
     done
@@ -35,4 +35,4 @@ for n in "${n_list[@]}"; do
 done
 
 echo ""
-echo " ^|^e Experimentos completados."
+echo "✅ Experimentos completados."
