@@ -6,16 +6,16 @@
 #SBATCH --error=logs/tsp_run_%j.err
 #SBATCH --mem=32G
 #SBATCH --nodes=1
-#SBATCH --ntasks=32        # M  ximo de procesos que se usar  n
+#SBATCH --ntasks=32        # Maximo de procesos que se usar  n
 #SBATCH --cpus-per-task=1
 #SBATCH --time=08:00:00
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=robert.buleje@utec.edu.pe
-runs=30
-p_list=(1 4 8 12 16 20 24 28 32) # procesos
-n_list=(4 6 8 10 12 14 16 18) # ciudades
+runs=2
+p_list=(1 4 ) # procesos
+n_list=(4 6 8 10 12 14 16) # ciudades
 
-script="tsp_mpi.py"
+script="tsp_mpi_improved.py"
 
 # Crear carpeta para logs si no existe
 mkdir -p logs

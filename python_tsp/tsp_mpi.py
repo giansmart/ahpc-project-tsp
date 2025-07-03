@@ -6,7 +6,7 @@ import os
 import random
 from mpi4py import MPI
 import pickle
-from utils import print_matrix
+from python_tsp.utils import print_matrix
 
 # Constante para infinito
 INF = float('inf')
