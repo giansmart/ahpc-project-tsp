@@ -1,0 +1,4 @@
+instance,threads,total_time,computation_time,overhead,nodes_created,nodes_processed,comp_eff_overall,overhead_percent
+17nodos.txt,4,0.064786,0.258777,0,0,1000000,399.434,0
+17nodos.txt,4,0.075409,0.301322,0,0,1000000,399.584,0
+17nodos.txt,4,0.082152,0.328083,0,0,1000000,399.361,0
